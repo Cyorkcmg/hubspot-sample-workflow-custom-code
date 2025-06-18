@@ -72,28 +72,87 @@ exports.main = (event, callback) => {
       // [CA-SECTION] Search for duplicates and merge if found
       console.log(`Looking for duplicates based on ${dedupeField} = ${dedupePropValue}`);
 
-      let searchFilters = [];
-
       if (dedupeField === 'phone') {
-        searchFilters = [{
-          filters: [
-            {
+        // Perform two separate searches and combine the results
+        const phoneSearch = hubspotClient.crm.contacts.searchApi.doSearch({
+          filterGroups: [{
+            filters: [{
               propertyName: 'phone',
               operator: 'EQ',
               value: dedupePropValue
-            }
-          ]
-        }, {
-          filters: [
-            {
+            }]
+          }]
+        });
+
+        const mobilePhoneSearch = hubspotClient.crm.contacts.searchApi.doSearch({
+          filterGroups: [{
+            filters: [{
               propertyName: 'mobilephone',
               operator: 'EQ',
               value: dedupePropValue
+            }]
+          }]
+        });
+
+        Promise.all([phoneSearch, mobilePhoneSearch])
+          .then(([phoneResults, mobileResults]) => {
+            let results = [
+              ...(phoneResults?.body?.results || []),
+              ...(mobileResults?.body?.results || [])
+            ];
+
+            // [CA-DEBUG] Log raw search result IDs for phone and mobilephone
+            console.log(
+              '[CA] Raw phone search IDs:',
+              Array.isArray(phoneResults?.body?.results) ? phoneResults.body.results.map(r => r.id) : []
+            );
+            console.log(
+              '[CA] Raw mobilephone search IDs:',
+              Array.isArray(mobileResults?.body?.results) ? mobileResults.body.results.map(r => r.id) : []
+            );
+
+            // De-dupe results and remove enrolled contact
+            let uniqueIds = [...new Set(results.map(obj => obj.id))].filter(
+              id => Number(id) !== Number(event.object.objectId)
+            );
+
+            console.log('[CA] Combined and filtered contact IDs:', uniqueIds);
+
+            if (uniqueIds.length === 0) {
+              console.log('No matching contact, nothing to merge');
+              return;
+            } else if (uniqueIds.length > 1) {
+              console.log(`Found multiple potential contact IDs ${uniqueIds.join(', ')} to merge`);
+              throw new Error("Ambiguous merge; more than one matching contact");
             }
-          ]
-        }];
+
+            const idToMerge = uniqueIds[0];
+            console.log(`Merging enrolled contact id=${event.object.objectId} into contact id=${idToMerge}`);
+
+            return hubspotClient
+              .apiRequest({
+                method: 'POST',
+                path: `/contacts/v1/contact/merge-vids/${idToMerge}`,
+                body: {
+                  vidToMerge: event.object.objectId
+                }
+              })
+              .then(() => {
+                console.log('[CA] Contacts merged!');
+                callback({
+                  outputFields: {
+                    status: 'Merge complete or skipped. See logs for details.'
+                  }
+                });
+              });
+          })
+          .catch(err => {
+            console.error('[CA] Dedupe process failed:', err.message);
+          });
+
+        return; // Prevent further execution
       } else {
-        searchFilters = [{
+        let searchFilters = [{
           filters: [
             {
               propertyName: dedupeField,
@@ -102,50 +161,50 @@ exports.main = (event, callback) => {
             }
           ]
         }];
-      }
 
-      hubspotClient.crm.contacts.searchApi
-        .doSearch({
-          filterGroups: searchFilters
-        })
-        .then(searchResults => {
-          let results = searchResults?.body?.results || [];
-          console.log('[CA] Full search results:', JSON.stringify(results, null, 2));
-          console.log('[CA] Number of results from search:', results.length);
-          console.log('[CA] Returned contact IDs:', results.map(obj => obj.id));
-          let idsToMerge = results
-            .map(object => object.id)
-            .filter(vid => Number(vid) !== Number(event.object.objectId));
+        hubspotClient.crm.contacts.searchApi
+          .doSearch({
+            filterGroups: searchFilters
+          })
+          .then(searchResults => {
+            let results = searchResults?.body?.results || [];
+            console.log('[CA] Full search results:', JSON.stringify(results, null, 2));
+            console.log('[CA] Number of results from search:', results.length);
+            console.log('[CA] Returned contact IDs:', results.map(obj => obj.id));
+            let idsToMerge = results
+              .map(object => object.id)
+              .filter(vid => Number(vid) !== Number(event.object.objectId));
 
-          if (idsToMerge.length === 0) {
-            console.log('No matching contact, nothing to merge');
-            return;
-          } else if (idsToMerge.length > 1) {
-            console.log(`Found multiple potential contact IDs ${idsToMerge.join(', ')} to merge`);
-            throw new Error("Ambiguous merge; more than one matching contact");
-          }
+            if (idsToMerge.length === 0) {
+              console.log('No matching contact, nothing to merge');
+              return;
+            } else if (idsToMerge.length > 1) {
+              console.log(`Found multiple potential contact IDs ${idsToMerge.join(', ')} to merge`);
+              throw new Error("Ambiguous merge; more than one matching contact");
+            }
 
-          let idToMerge = idsToMerge[0];
-          console.log(`Merging enrolled contact id=${event.object.objectId} into contact id=${idToMerge}`);
+            let idToMerge = idsToMerge[0];
+            console.log(`Merging enrolled contact id=${event.object.objectId} into contact id=${idToMerge}`);
 
-          hubspotClient
-            .apiRequest({
-              method: 'POST',
-              path: `/contacts/v1/contact/merge-vids/${idToMerge}`,
-              body: {
-                vidToMerge: event.object.objectId
-              }
-            })
-            .then(mergeResult => {
-              console.log('[CA] Contacts merged!');
-              callback({
-                outputFields: {
-                  status: 'Merge complete or skipped. See logs for details.'
+            hubspotClient
+              .apiRequest({
+                method: 'POST',
+                path: `/contacts/v1/contact/merge-vids/${idToMerge}`,
+                body: {
+                  vidToMerge: event.object.objectId
                 }
+              })
+              .then(mergeResult => {
+                console.log('[CA] Contacts merged!');
+                callback({
+                  outputFields: {
+                    status: 'Merge complete or skipped. See logs for details.'
+                  }
+                });
               });
-            });
-        }).catch(err => {
-          console.error('[CA] Dedupe process failed:', err.message);
-        });
+          }).catch(err => {
+            console.error('[CA] Dedupe process failed:', err.message);
+          });
+      }
     });
 };
