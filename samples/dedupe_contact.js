@@ -11,10 +11,16 @@ exports.main = (event, callback) => {
     accessToken: process.env.secretName
   });
 
+  console.log('[CA] Dedupe workflow started for contact:', event.object.objectId);
+
   // [CA-SECTION] Retrieve contact details
   hubspotClient.crm.contacts.basicApi
     .getById(event.object.objectId, [DEDUPE_PROPERTY, 'address', 'city', 'state', 'zip'])
     .then(contactResult => {
+      if (!contactResult || !contactResult.body || !contactResult.body.properties) {
+        console.error('[CA] Could not retrieve contact properties');
+        return;
+      }
       // [CA-SECTION] Normalize phone and address for deduplication
       let rawPhone = contactResult.body.properties[DEDUPE_PROPERTY] || "";
       let digitsOnly = rawPhone.replace(/\D/g, '');
