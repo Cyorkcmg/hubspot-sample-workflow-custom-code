@@ -24,7 +24,7 @@ exports.main = (event, callback) => {
       }
       console.log('[CA] Contact properties:', contactProperties);
       // [CA-SECTION] Normalize phone and address for deduplication
-      let rawPhone = contactProperties['phone'] || contactProperties['mobilephone'] || "";ß
+      let rawPhone = contactProperties['phone'] || contactProperties['mobilephone'] || "";
       if (contactProperties['phone']) {
         console.log('[CA] Using phone for deduplication');
       } else if (contactProperties['mobilephone']) {
