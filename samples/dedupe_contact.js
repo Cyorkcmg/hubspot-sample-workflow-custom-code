@@ -16,17 +16,18 @@ exports.main = (event, callback) => {
   // [CA-SECTION] Retrieve contact details
   hubspotClient.crm.contacts.basicApi
     .getById(event.object.objectId, ['phone', 'mobilephone', 'address', 'city', 'state', 'zip'])
-    .then(contactResult => {
-      if (!contactResult || !contactResult.body || !contactResult.body.properties) {
+    .then(apiResponse => {
+      const contactProperties = apiResponse?.properties;
+      if (!contactProperties) {
         console.error('[CA] Could not retrieve contact properties');
         return;
       }
-      console.log('[CA] Contact properties:', contactResult.body.properties);
+      console.log('[CA] Contact properties:', contactProperties);
       // [CA-SECTION] Normalize phone and address for deduplication
-      let rawPhone = contactResult.body.properties['phone'] || contactResult.body.properties['mobilephone'] || "";
-      if (contactResult.body.properties['phone']) {
+      let rawPhone = contactProperties['phone'] || contactProperties['mobilephone'] || "";ß
+      if (contactProperties['phone']) {
         console.log('[CA] Using phone for deduplication');
-      } else if (contactResult.body.properties['mobilephone']) {
+      } else if (contactProperties['mobilephone']) {
         console.log('[CA] Using mobilephone for deduplication');
       }
       let digitsOnly = rawPhone.replace(/\D/g, '');
@@ -36,10 +37,10 @@ exports.main = (event, callback) => {
       }
       console.log('[CA] Normalized phone value:', digitsOnly);
 
-      let street = contactResult.body.properties['address'] || '';
-      let city = contactResult.body.properties['city'] || '';
-      let state = contactResult.body.properties['state'] || '';
-      let zip = contactResult.body.properties['zip'] || '';
+      let street = contactProperties['address'] || '';
+      let city = contactProperties['city'] || '';
+      let state = contactProperties['state'] || '';
+      let zip = contactProperties['zip'] || '';
 
       // [CA-SECTION] Normalize address for fallback deduplication
       let rawAddress = `${street}, ${city}, ${state}, ${zip}`.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -109,6 +110,7 @@ exports.main = (event, callback) => {
         })
         .then(searchResults => {
           let results = searchResults?.body?.results || [];
+          console.log('[CA] Full search results:', JSON.stringify(results, null, 2));
           console.log('[CA] Number of results from search:', results.length);
           console.log('[CA] Returned contact IDs:', results.map(obj => obj.id));
           let idsToMerge = results
@@ -136,6 +138,11 @@ exports.main = (event, callback) => {
             })
             .then(mergeResult => {
               console.log('[CA] Contacts merged!');
+              callback({
+                outputFields: {
+                  status: 'Merge complete or skipped. See logs for details.'
+                }
+              });
             });
         }).catch(err => {
           console.error('[CA] Dedupe process failed:', err.message);
