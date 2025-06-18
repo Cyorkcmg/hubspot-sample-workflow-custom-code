@@ -1,42 +1,76 @@
-/**
- * Searches for another contact with the same value of DEDUPE_PROPERTY.
- * - If no matches are found, nothing happens
- * - If one match is found, the enrolled contact is merged into the matching contact
- * - If more than one match is found, the action fails
- */
-
-const DEDUPE_PROPERTY = 'phone';
+// [CA-SECTION] Initialize HubSpot client
+const DEDUPE_PROPERTY = 'phone'; // Primary field used to deduplicate contacts (before fallback)
 
 const hubspot = require('@hubspot/api-client');
 
+// [CA-NOTE] Main entry point for the HubSpot workflow extension
+// Main workflow execution logic triggered by HubSpot workflow
 exports.main = (event, callback) => {
   // Make sure to add your API key under "Secrets" above.
   const hubspotClient = new hubspot.Client({
     accessToken: process.env.secretName
   });
 
+  // [CA-SECTION] Retrieve contact details
   hubspotClient.crm.contacts.basicApi
-    .getById(event.object.objectId, [DEDUPE_PROPERTY])
+    .getById(event.object.objectId, [DEDUPE_PROPERTY, 'address', 'city', 'state', 'zip'])
     .then(contactResult => {
-      let dedupePropValue = contactResult.body.properties[DEDUPE_PROPERTY];
+      // [CA-SECTION] Normalize phone and address for deduplication
+      let rawPhone = contactResult.body.properties[DEDUPE_PROPERTY] || "";
+      let digitsOnly = rawPhone.replace(/\D/g, '');
+      // [CA-NOTE] Remove leading '1' from 11-digit US phone numbers to normalize to 10 digits.
+      if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
+        digitsOnly = digitsOnly.substring(1);
+      }
 
-      console.log(`Looking for duplicates based on ${DEDUPE_PROPERTY} = ${dedupePropValue}`);
+      let street = contactResult.body.properties['address'] || '';
+      let city = contactResult.body.properties['city'] || '';
+      let state = contactResult.body.properties['state'] || '';
+      let zip = contactResult.body.properties['zip'] || '';
+
+      // [CA-SECTION] Normalize address for fallback deduplication
+      let rawAddress = `${street}, ${city}, ${state}, ${zip}`.toLowerCase().replace(/\s+/g, ' ').trim();
+      let normalizedAddress = rawAddress
+        .replace(/\bst\b/g, 'street')
+        .replace(/\brd\b/g, 'road')
+        .replace(/\bave\b/g, 'avenue')
+        .replace(/[^a-z0-9]/g, '');
+
+      // [CA-SECTION] Determine deduplication key (phone or address)
+      // [CA-NOTE] Use phone if valid 10-digit; otherwise fallback to normalized address.
+      let dedupePropValue;
+      let dedupeField = DEDUPE_PROPERTY;
+
+      if (digitsOnly.length === 10) {
+        dedupePropValue = digitsOnly;
+      } else if (normalizedAddress) {
+        dedupeField = 'ca_normalized_address'; // Address fallback dedupe field
+        dedupePropValue = normalizedAddress;
+        console.log(`Falling back to dedupe based on address: ${dedupePropValue}`);
+      } else {
+        console.log('Neither phone nor address suitable for deduplication');
+        return;
+      }
+
+      // [CA-SECTION] Search for duplicates and merge if found
+      console.log(`Looking for duplicates based on ${dedupeField} = ${dedupePropValue}`);
       hubspotClient.crm.contacts.searchApi
         .doSearch({
           filterGroups: [{
             filters: [{
-              propertyName: DEDUPE_PROPERTY,
+              propertyName: dedupeField,
               operator: 'EQ',
               value: dedupePropValue
             }]
           }]
         })
         .then(searchResults => {
-          let idsToMerge = searchResults.body.results
+          let results = searchResults?.body?.results || [];
+          let idsToMerge = results
             .map(object => object.id)
             .filter(vid => Number(vid) !== Number(event.object.objectId));
 
-          if (idsToMerge.length == 0) {
+          if (idsToMerge.length === 0) {
             console.log('No matching contact, nothing to merge');
             return;
           } else if (idsToMerge.length > 1) {
@@ -46,6 +80,7 @@ exports.main = (event, callback) => {
 
           let idToMerge = idsToMerge[0];
           console.log(`Merging enrolled contact id=${event.object.objectId} into contact id=${idToMerge}`);
+
           hubspotClient
             .apiRequest({
               method: 'POST',
@@ -55,8 +90,10 @@ exports.main = (event, callback) => {
               }
             })
             .then(mergeResult => {
-              console.log('Contacts merged!');
+              console.log('[CA] Contacts merged!');
             });
+        }).catch(err => {
+          console.error('[CA] Dedupe process failed:', err.message);
         });
     });
 };
