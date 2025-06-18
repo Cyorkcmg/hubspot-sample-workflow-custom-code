@@ -21,6 +21,7 @@ exports.main = (event, callback) => {
         console.error('[CA] Could not retrieve contact properties');
         return;
       }
+      console.log('[CA] Contact properties:', contactResult.body.properties);
       // [CA-SECTION] Normalize phone and address for deduplication
       let rawPhone = contactResult.body.properties['phone'] || contactResult.body.properties['mobilephone'] || "";
       if (contactResult.body.properties['phone']) {
@@ -33,6 +34,7 @@ exports.main = (event, callback) => {
       if (digitsOnly.length === 11 && digitsOnly.startsWith('1')) {
         digitsOnly = digitsOnly.substring(1);
       }
+      console.log('[CA] Normalized phone value:', digitsOnly);
 
       let street = contactResult.body.properties['address'] || '';
       let city = contactResult.body.properties['city'] || '';
@@ -46,6 +48,7 @@ exports.main = (event, callback) => {
         .replace(/\brd\b/g, 'road')
         .replace(/\bave\b/g, 'avenue')
         .replace(/[^a-z0-9]/g, '');
+      console.log('[CA] Normalized address value:', normalizedAddress);
 
       // [CA-SECTION] Determine deduplication key (phone or address)
       // [CA-NOTE] Use phone if valid 10-digit; otherwise fallback to normalized address.
@@ -62,6 +65,8 @@ exports.main = (event, callback) => {
         console.log('Neither phone nor address suitable for deduplication');
         return;
       }
+      console.log('[CA] Final dedupe field:', dedupeField);
+      console.log('[CA] Final dedupe value:', dedupePropValue);
 
       // [CA-SECTION] Search for duplicates and merge if found
       console.log(`Looking for duplicates based on ${dedupeField} = ${dedupePropValue}`);
@@ -104,6 +109,8 @@ exports.main = (event, callback) => {
         })
         .then(searchResults => {
           let results = searchResults?.body?.results || [];
+          console.log('[CA] Number of results from search:', results.length);
+          console.log('[CA] Returned contact IDs:', results.map(obj => obj.id));
           let idsToMerge = results
             .map(object => object.id)
             .filter(vid => Number(vid) !== Number(event.object.objectId));
